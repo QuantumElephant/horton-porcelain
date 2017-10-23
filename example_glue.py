@@ -351,8 +351,8 @@ class Method:
 
 class HF(Options, Method, DelayedInit):
     @finalize
-    def finish_init(self, molecule, basis, scf, occ_model, orb, grid):
-        super().finish_init(molecule.coords, basis, scf)
+    def finish_init(self, coords, basis, scf, occ_model, orb, grid):
+        super().finish_init(coords, basis, scf)
 
         self._occ_model = occ_model
         self._orb = orb
@@ -398,8 +398,8 @@ class DFT(Options, Method, DelayedInit):
         super().__init__()
 
     @finalize
-    def finish_init(self, molecule, basis, scf, occ_model, orb, grid):
-        super().finish_init(molecule.coords, basis, scf)
+    def finish_init(self, coords, basis, scf, occ_model, orb, grid):
+        super().finish_init(coords, basis, scf)
 
         self._occ_model = occ_model
         self._orb = orb
@@ -413,8 +413,6 @@ class DFT(Options, Method, DelayedInit):
             self._ham = UEffHam(terms, external)
         else:
             raise NotImplementedError
-
-            # TODO: add smart XC selector
 
     _term_dict = {("R", "two"): RTwoIndexTerm, ("U", "two"): UTwoIndexTerm,
                   ("R", "direct"): RDirectTerm, ("U", "direct"): UDirectTerm,
@@ -476,6 +474,8 @@ class SmartCompute:
             basis.bset = "6-311+G(2p,2d)"
         else:
             basis.bset = "6-311G(2p,2d)"
+
+        # TODO: add smart XC selector
 
         # Compose the different option classes together to finalize instantiation
         basis.finish_init(molecule.coords, molecule.atomic_nums)
