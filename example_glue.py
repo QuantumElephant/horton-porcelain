@@ -512,6 +512,12 @@ basis = Basis("cc-pvtz")
 c = SmartCompute(mol, basis)
 print(c.energy)
 
+# restricted calculation
+mol = Molecule.from_file("water.xyz")
+orb = Orbitals("R")
+c = SmartCompute(mol, orbs=orb)
+print(c.energy)
+
 # dft example
 mol = Molecule.from_file("water.xyz")
 method = DFT("LDA_X")
