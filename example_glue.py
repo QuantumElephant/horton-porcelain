@@ -1,7 +1,9 @@
 import gobasis
 import grid
-from meanfield import *
+import iodata
+import numpy as np
 from functools import wraps
+from meanfield import *
 
 
 #
@@ -73,8 +75,10 @@ class DelayedInit:
 class Molecule(Options):
     def __init__(self, coords, atomic_numbers, pseudo_numbers=None, charge=None, multiplicity=None):
         self._coords = coords
-        self._atomic_nums = atomic_numbers
-        self._pseudo = pseudo_numbers
+        self._atomic_nums = atomic_numbers if isinstance(atomic_numbers, np.ndarray) else np.array(
+            atomic_numbers)
+        self._pseudo = pseudo_numbers if isinstance(pseudo_numbers, np.ndarray) else np.array(
+            pseudo_numbers)
 
         self._charge = charge or 0
 
@@ -85,6 +89,12 @@ class Molecule(Options):
             default_multiplicity = 1
 
         self._multiplicity = multiplicity or default_multiplicity
+
+    @classmethod
+    def from_file(cls, filename):
+        # TODO: load from file
+        mol = iodata.from_file(filename)
+        return cls(mol.coords, mol.atomic_numbers)
 
     @property
     def coords(self):
@@ -135,6 +145,10 @@ class Molecule(Options):
 
 class Basis(Options, DelayedInit):
     def __init__(self, bset=None):
+        """Specify basis set options.
+        bset can be a string containing the basis set name, or a nested tuple like ((int, string),)
+            containing the atom index and basis set name respectively.
+        """
         self._bset = bset
         self._olp = None
         self._kin = None
@@ -324,7 +338,6 @@ class Method:
         return self._ham.energy
 
 
-
 class HF(Options, Method, DelayedInit):
     @finalize
     def finish_init(self, molecule, basis, scf, occ_model, orb, grid):
@@ -390,8 +403,7 @@ class DFT(Options, Method, DelayedInit):
         else:
             raise NotImplementedError
 
-        # TODO: add smart XC selector
-
+            # TODO: add smart XC selector
 
     _term_dict = {("R", "two"): RTwoIndexTerm, ("U", "two"): UTwoIndexTerm,
                   ("R", "direct"): RDirectTerm, ("U", "direct"): UDirectTerm,
@@ -413,7 +425,7 @@ class DFT(Options, Method, DelayedInit):
             self._term_dict[(spin, "two")](basis.nuclear_attraction, 'ne'),
         ]
         # Add exchange terms in for hybrid functionals
-        for s,t in zip(libxc_strings, libxc_terms):
+        for s, t in zip(libxc_strings, libxc_terms):
             if "hyb" in s[:3]:
                 terms.append(self._term_dict[(spin, "exchange")](basis.electron_repulsion, 'x_hf',
                                                                  t.get_exx_fraction()))
@@ -460,14 +472,37 @@ class SmartCompute:
         method.finish_init(molecule.coords, basis, scf, occ_model, orbs, grid)
 
         # store attributes
-        self._basis = basis
-        self._guess = guess
-        self._method = method
-        self._scf = scf
-        self._orbs = orbs
-        self._occ_model = occ_model
-        self._grid = grid
+        self.basis = basis
+        self.guess = guess
+        self.method = method
+        self.scf = scf
+        self.orbs = orbs
+        self.occ_model = occ_model
+        self.grid = grid
+
+    def __getattr__(self, item):
+        # FIXME: by default, gets attributes from the method class. Maybe this isn't a good idea...
+        # TODO: this breaks autocompletion in pycharm...
+        return getattr(self._method, item)
+
 
 #
 # Example of use
 #
+
+# minimum use-case
+mol = Molecule.from_file("water.xyz")
+c = SmartCompute(mol)
+print(c.energy)
+
+# specify basis
+mol = Molecule([0, 0, 0], [1])
+basis = Basis("cc-pvtz")
+c = SmartCompute(mol, basis)
+print(c.energy)
+
+# dft example
+mol = Molecule.from_file("water.xyz")
+method = DFT("LDA_X")
+c = SmartCompute(mol, method=method)
+print(c.energy)
