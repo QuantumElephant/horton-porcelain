@@ -178,25 +178,33 @@ class Basis(Options, DelayedInit):
     @cache("_kin")
     @delayed
     def kinetic(self):
-        return self._gobasis.compute_kinetic()
+        x = self._gobasis.compute_kinetic()
+        x.flags.writable = False
+        return x
 
     @property
     @cache("_er")
     @delayed
     def electron_repulsion(self):
-        return self._gobasis.compute_electron_repulsion()
+        x = self._gobasis.compute_electron_repulsion()
+        x.flags.writable = False
+        return x
 
     @property
     @cache("_na")
     @delayed
     def nuclear_attraction(self):
-        return self._gobasis.compute_nuclear_attraction(self._coords, self._pseudo)
+        x = self._gobasis.compute_nuclear_attraction(self._coords, self._pseudo)
+        x.flags.writable = False
+        return x
 
     @property
     @cache("_one")
     @delayed
     def one(self):
-        return self.kinetic + self.nuclear_attraction
+        x = self.kinetic + self.nuclear_attraction
+        x.flags.writable = False
+        return x
 
     @property
     @cache("_nn")
@@ -208,7 +216,9 @@ class Basis(Options, DelayedInit):
     @cache("_olp")
     @delayed
     def overlap(self):
-        return self._gobasis.compute_overlap()
+        x = self._gobasis.compute_overlap()
+        x.flags.writable = False
+        return x
 
     @property
     @delayed
@@ -227,6 +237,7 @@ class CoreHamGuess(Guess):
         self._one = one
         self._orbs = orbs
 
+    @delayed
     def make_guess(self):
         # writes guess into orbs. No return value
         guess_core_hamiltonian(self._olp, self._one, *self._orbs)
