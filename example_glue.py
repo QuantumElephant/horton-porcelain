@@ -2,74 +2,24 @@ import gobasis
 import grid
 import iodata
 import numpy as np
-from functools import wraps
+from abc import ABCMeta
 from meanfield import *
-
-
-#
-# Decorators
-#
-
-def onetime(varname):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            if getattr(self, varname) is not None:
-                print("Trying to set a one-time attribute {varname}. Ignored")
-                return
-            func(self, *args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
-def cache(varname):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            if getattr(self, varname) is None:
-                val = func(self, *args, **kwargs)
-                setattr(self, varname, val)
-            return getattr(self, varname)
-
-        return wrapper
-
-    return decorator
-
-
-def delayed(func):
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        if not self.init_finished:
-            print("Instance must finalize instantiation before calling compute functions.")
-            raise AttributeError
-        return func(self, *args, **kwargs)
-
-    return wrapper
-
-
-def finalize(func):
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        func(self, *args, **kwargs)
-        self.init_finished = True
-
-    return wrapper
+from decorators import finalize, cache, onetime, delayed
 
 
 #
 # Options classes
 #
 
-class Options:
+class Options(metaclass=ABCMeta):
+    """
+    Users instantiate child classes of this class to specify which options they want
+    for calculations.
+    """
+
     # __init__ is for options. finish_init is for inputs used in calculations.
     def finish_init(self):
         raise NotImplementedError
-
-
-class DelayedInit:
-    init_finished = False
 
 
 class Molecule(Options):
@@ -89,6 +39,9 @@ class Molecule(Options):
             default_multiplicity = 1
 
         self._multiplicity = multiplicity or default_multiplicity
+
+    def finish_init(self):
+        pass
 
     @classmethod
     def from_file(cls, filename):
@@ -143,7 +96,7 @@ class Molecule(Options):
         return self.nelec[1]
 
 
-class Basis(Options, DelayedInit):
+class Basis(Options):
     def __init__(self, bset=None):
         """Specify basis set options.
         bset can be a string containing the basis set name, or a nested tuple like ((int, string),)
@@ -243,7 +196,7 @@ class CoreHamGuess(Guess):
         guess_core_hamiltonian(self._olp, self._one, *self._orbs)
 
 
-class Grid(Options, DelayedInit):
+class Grid(Options):
     def __init__(self, accuracy='coarse'):
         self._accuracy = accuracy
 
@@ -260,7 +213,7 @@ class BeckeGrid(Grid):
         return self._grid
 
 
-class Orbitals(Options, DelayedInit):
+class Orbitals(Options):
     def __init__(self, spin="U"):
         self._spin = spin
 
@@ -316,7 +269,7 @@ class DIIS(SCF):
 # Compute classes
 #
 
-class Method:
+class Method(Options):
     def __init__(self):
         self._ham = None
         self._basis = None
@@ -349,7 +302,7 @@ class Method:
         return self._ham.energy
 
 
-class HF(Options, Method, DelayedInit):
+class HF(Method):
     @finalize
     def finish_init(self, coords, basis, scf, occ_model, orb, grid):
         super().finish_init(coords, basis, scf)
@@ -379,7 +332,7 @@ class HF(Options, Method, DelayedInit):
             raise NotImplementedError
 
 
-class DFT(Options, Method, DelayedInit):
+class DFT(Method):
     def __init__(self, xc=None, x=None, c=None, frac=None):
         if xc and (x or c or frac):
             print("Cannot specify xc and also x or c functionals or exchange fraction")
