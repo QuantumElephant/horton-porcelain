@@ -2,8 +2,10 @@ import gobasis
 import grid
 import iodata
 import numpy as np
+import periodic
 from abc import ABCMeta
 from meanfield import *
+
 from decorators import finalize, cache, onetime, delayed
 
 
@@ -24,11 +26,15 @@ class Options(metaclass=ABCMeta):
 
 class Molecule(Options):
     def __init__(self, coords, atomic_numbers, pseudo_numbers=None, charge=None, multiplicity=None):
-        self._coords = coords
+        self._coords = coords if isinstance(coords, np.ndarray) else np.array(coords)
         self._atomic_nums = atomic_numbers if isinstance(atomic_numbers, np.ndarray) else np.array(
-            atomic_numbers)
+            atomic_numbers, dtype=int)
         self._pseudo = pseudo_numbers if isinstance(pseudo_numbers, np.ndarray) else np.array(
-            pseudo_numbers)
+            pseudo_numbers, dtype=int)
+
+        if not self._check_multiplicity_charge(multiplicity, charge):
+            print("Non-sensical combination of multiplicity and charge given.")
+            raise ValueError
 
         self._charge = charge or 0
 
@@ -62,7 +68,7 @@ class Molecule(Options):
         return self._pseudo
 
     @property
-    def stretched_bond(self):
+    def stretched_bonds(self):
         return self._check_bond_length()
 
     @property
@@ -77,10 +83,23 @@ class Molecule(Options):
     def multiplicity(self):
         return self._multiplicity
 
-    def _check_bond_length(self):
-        return False  # TODO: Replace dummy
+    @staticmethod
+    def _check_bond_length(self, z: np.ndarray, r: np.ndarray):  # TODO: write unit test.
+        def cov_distance(self, za: int, zb: int):
+            return (periodic[za].cov_radius + periodic[zb].cov_radius)
 
-    def _check_multiplicity_charge(self):
+        def bond_length(self, ra: np.ndarray, rb: np.ndarray):
+            return np.linalg.norm(ra - rb)
+
+        stretched_bonds = set()
+
+        for i, za, ra in enumerate(zip(z, r)):
+            for j, zb, rb in enumerate(zip(z[i:], r[i:])):
+                if 1.2 * cov_distance(za, zb) < bond_length(ra, rb) < 1.3 * cov_distance(za, zb):
+                    stretched_bonds.add()
+        return False
+
+    def _check_multiplicity_charge(self, multiplicity, charge):
         return True  # TODO: Replace dummy
 
     @property
@@ -124,6 +143,16 @@ class Basis(Options):
     @onetime("_bset")
     def bset(self, bset):
         self._bset = bset
+
+    @property
+    @delayed
+    def nbasis(self):
+        return self._gobasis.nbasis
+
+    @property
+    @delayed
+    def gobasis(self):
+        return self._gobasis
 
     # Cached Properties
 
@@ -172,11 +201,6 @@ class Basis(Options):
         x = self._gobasis.compute_overlap()
         x.flags.writable = False
         return x
-
-    @property
-    @delayed
-    def gobasis(self):
-        return self._gobasis
 
 
 class Guess(Options):
@@ -274,6 +298,8 @@ class Method(Options):
         self._ham = None
         self._basis = None
         self._molecule = None
+        self._occ_model = None
+        self._orb = None
 
     @finalize
     def finish_init(self, coords, basis, scf):
@@ -333,22 +359,52 @@ class HF(Method):
 
 
 class DFT(Method):
-    def __init__(self, xc=None, x=None, c=None, frac=None):
-        if xc and (x or c or frac):
-            print("Cannot specify xc and also x or c functionals or exchange fraction")
+    def __init__(self, functionals: str = None, frac: float = None):  # TODO: 1 frac per functional?
+        """
+
+        Parameters
+        ----------
+        functionals
+            A comma separated string of libxc functionals. Use the libxc full functional name.
+            Some additional functionals are recognized for convenience's sake. (ie BP86)
+        frac
+            A float for the exchange fraction used in a functional.
+        """
+        self._funcs = [i.upper().strip() for i in functionals.split(",")]
+        # TODO: transform common aliases into libxc functionals
+
+        if frac and "HYB_" not in functionals:
+            print("Cannot specify exchange fraction without hybrid type functional")
             raise ValueError
 
-        if c and not x:
-            print("Cannot specify correlation without exchange functional.")
-            raise ValueError
+        if "_K_" in functionals:
+            print("Kinetic functionals are not supported yet.")
+            raise NotImplementedError
 
-        self._xc = xc
-        self._x = x
-        self._c = c
         self._frac = frac
-        self._funcs = [i for i in (xc, x, c) if i is not None]
 
         super().__init__()
+
+    @property
+    def xc(self):
+        return [i for i in self._funcs if "_XC_" in i or i.endswith("_XC")]
+
+    @property
+    def x(self):
+        return [i for i in self._funcs if "_X_" in i or i.endswith("_X")]
+
+    @property
+    def c(self):
+        return [i for i in self._funcs if "_C_" in i or i.endswith("_C")]
+
+    @property
+    def functionals(self):
+        return self._funcs
+
+    @functionals.setter
+    @onetime("_funcs")
+    def functionals(self, s):
+        self._funcs = [i.upper().strip() for i in s.split(",")]
 
     @finalize
     def finish_init(self, coords, basis, scf, occ_model, orb, grid):
@@ -405,7 +461,9 @@ class DFT(Method):
 class SmartCompute:
     def __init__(self, molecule, basis=None, guess=None, method=None, grid=None, scf=None,
                  orbs=None):
+        #
         # Initialize defaults if not provided
+        #
         basis = basis or Basis()
         guess = guess or CoreHamGuess()
         method = method or HF()
@@ -422,20 +480,41 @@ class SmartCompute:
             grid = grid or BeckeGrid()
             method = method or DFT()
 
+        #
         # Make smart defaults
-        if molecule.stretched_bond or molecule.negative_charge:
+        #
+        if molecule.stretched_bonds or molecule.negative_charge:
             basis.bset = "6-311+G(2p,2d)"
         else:
             basis.bset = "6-311G(2p,2d)"
 
-        # TODO: add smart XC selector
+        # Select xc for DFT:
+        if isinstance(method, DFT):
+            if molecule.stretched_bonds:
+                method.functionals = "HYB_GGA_XC_B3LYP"
+            elif max(molecule.atomic_nums) <= 10 \
+                    and 3 not in molecule.atomic_nums \
+                    and 4 not in molecule.atomic_nums:
+                method.functionals = "HYB_MGGA_XC_M06"
+            elif max(molecule.atomic_nums) > 36:
+                print("Cannot compute Z > 36. We do not have relativisitic corrections yet.")
+                raise NotImplementedError
+            else:
+                method.functionals = "GGA_X_B88, GGA_C_LYP"
 
+        #
         # Compose the different option classes together to finalize instantiation
+        #
         basis.finish_init(molecule.coords, molecule.atomic_nums)
         guess.finish_init(basis.overlap, basis.one, *orbs.orbs)
+        if grid:
+            grid.finish_init(molecule.coords, molecule.atomic_nums, molecule.pseudo_nums)
+        orbs.finish_init(basis.nbasis)
         method.finish_init(molecule.coords, basis, scf, occ_model, orbs, grid)
 
+        #
         # store attributes
+        #
         self.basis = basis
         self.guess = guess
         self.method = method
